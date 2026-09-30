@@ -78,7 +78,16 @@ vi.mock('@renderer/pages/guid/components/GuidModelSelector', () => ({
 }));
 
 vi.mock('@renderer/components/workspace', () => ({
-  WorkspaceFolderSelect: () => <div data-testid='workspace-folder-select' />,
+  WorkspaceFolderSelect: ({ onChange, onClear }: { onChange: (value?: string) => void; onClear: () => void }) => (
+    <div data-testid='workspace-folder-select'>
+      <button type='button' data-testid='workspace-pick' onClick={() => onChange('/picked/forks')}>
+        pick
+      </button>
+      <button type='button' data-testid='workspace-clear' onClick={() => onClear()}>
+        clear
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('@renderer/pages/cron/cronUtils', async (importOriginal) => ({
@@ -436,6 +445,46 @@ describe('CreateTaskDialog', () => {
 
     expect(screen.getByRole('radio', { name: 'cron.page.form.taskTypeAgent' })).toBeEnabled();
     expect(screen.getByRole('radio', { name: 'cron.page.form.taskTypeShell' })).toBeDisabled();
+  });
+
+  it('switching back to the assistant type restores the default execution mode', async () => {
+    const user = userEvent.setup();
+
+    render(<CreateTaskDialog visible onClose={() => {}} conversation_id='conv-1' />);
+
+    // Shell mode hides the execution-mode section entirely…
+    await user.click(screen.getByRole('radio', { name: 'cron.page.form.taskTypeShell' }));
+    expect(screen.queryByTestId('cron-execution-mode-group')).not.toBeInTheDocument();
+
+    // …and switching back restores the section with the create default.
+    await user.click(screen.getByRole('radio', { name: 'cron.page.form.taskTypeAgent' }));
+    expect(screen.getByTestId('cron-execution-mode-group')).toBeInTheDocument();
+    expect(screen.getByText('cron.detail.executionModeDescriptionNew')).toBeInTheDocument();
+  });
+
+  it('persists shell workspace and timeout overrides', async () => {
+    const user = userEvent.setup();
+
+    render(<CreateTaskDialog visible onClose={() => {}} conversation_id='conv-1' />);
+
+    await user.click(screen.getByRole('radio', { name: 'cron.page.form.taskTypeShell' }));
+    await user.click(await screen.findByTestId('workspace-pick'));
+    await user.click(screen.getByTestId('workspace-clear'));
+    await user.click(screen.getByTestId('workspace-pick'));
+    await user.click(await screen.findByTestId('cron-shell-timeout-select'));
+    fireEvent.click(await screen.findByText('30 min'));
+
+    await user.type(screen.getByTestId('cron-name-input'), 'Mirror repos');
+    await user.type(screen.getByTestId('cron-prompt-input'), 'git fetch --all --prune');
+    await user.click(screen.getByTestId('modal-ok'));
+
+    await waitFor(() => expect(ipcBridge.cron.addJob.invoke).toHaveBeenCalledTimes(1));
+    const [params] = vi.mocked(ipcBridge.cron.addJob.invoke).mock.calls[0];
+    expect(params).toMatchObject({
+      action: 'shell',
+      shell_workspace: '/picked/forks',
+      shell_timeout_ms: 1_800_000,
+    });
   });
 });
 
